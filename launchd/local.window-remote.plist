@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Window Remote: start the phone remote at login, and restart it if it ever stops.
+     A template: launchd/install.sh fills in __HOME__ and copies it to ~/Library/LaunchAgents. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.window-remote</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/Library/Application Support/Window Remote/Window Remote Helper.app/Contents/MacOS/WindowRemote</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/Window Remote/launchd.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/Window Remote/launchd.log</string>
+</dict>
+</plist>

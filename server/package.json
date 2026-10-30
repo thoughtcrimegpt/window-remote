@@ -1,0 +1,10 @@
+{
+  "name": "window-remote-server",
+  "private": true,
+  "type": "module",
+  "description": "Window Remote: the web server the iPhone talks to (local and Tailscale only).",
+  "dependencies": {
+    "werift": "0.24.4",
+    "ws": "^8.22.0"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+bin/
+launcher/build/
+core/build/
+mac-app/build/
+.DS_Store
