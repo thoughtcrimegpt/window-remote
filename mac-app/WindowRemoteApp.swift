@@ -10,7 +10,27 @@ import CoreImage.CIFilterBuiltins
 
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let supportDir = home + "/Library/Application Support/Window Remote"
+let logDir = home + "/Library/Logs/Window Remote"
 let api = URL(string: "http://127.0.0.1:8765/api/admin/")!
+
+/** A line in ~/Library/Logs/Window Remote/app.log (only when something changes, never every second). */
+func appLog(_ s: String) {
+    let line = "\(ISO8601DateFormatter().string(from: Date())) app: \(s)\n"
+    let path = logDir + "/app.log"
+    try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+    if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+    if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
+}
+
+/** Runs a small system tool and returns its exit status. */
+@discardableResult
+func run(_ tool: String, _ args: [String]) -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: tool)
+    p.arguments = args
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    do { try p.run(); p.waitUntilExit(); return p.terminationStatus } catch { return -1 }
+}
 
 // MARK: - data from the server
 
@@ -53,13 +73,20 @@ final class Model: ObservableObject {
     @Published var reachable = true
     @Published var note: String?
     @Published var loginBusy = false
+    /// Seconds the helper has been running while the server does not answer (0 when it answers).
+    @Published var stuckFor = 0
     private var misses = 0
     private var startedHelper = false
+    private var unreachableSince: Date?
+    private var loggedStuck = false
+    private var askedPermissions = false
     private var timer: Timer?
 
     /// The background helper lives on its own (not inside this app), so macOS ties Screen Recording
     /// to it directly and rebuilding this window app never affects the permission.
     var helperURL: URL { URL(fileURLWithPath: supportDir + "/Window Remote Helper.app") }
+    /// The name the helper shows in System Settings ("Window Remote Helper"; older installs: "Window Remote").
+    var helperName: String { (Bundle(url: helperURL)?.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "Window Remote Helper" }
     var key: String { ((try? String(contentsOfFile: supportDir + "/admin.key", encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
 
     func start() {
@@ -71,13 +98,49 @@ final class Model: ObservableObject {
         guard let (obj, _) = await call("state", post: false), let data = try? JSONSerialization.data(withJSONObject: obj),
               let s = try? JSONDecoder().decode(AdminState.self, from: data) else {
             misses += 1
-            if misses >= 2 { reachable = false; startHelperIfNeeded() }
+            if misses >= 2 {
+                reachable = false
+                let since = unreachableSince ?? Date()
+                unreachableSince = since
+                if helperRunning() {
+                    // Starting it again would only make a second copy that exits at once: say what is wrong instead.
+                    stuckFor = Int(Date().timeIntervalSince(since))
+                    if stuckFor >= 30 && !loggedStuck {
+                        loggedStuck = true
+                        appLog("the helper is running but the server has not answered for 30 s; macOS may be waiting on a permission prompt (look behind other windows), or run ./install.sh again")
+                    }
+                } else {
+                    stuckFor = 0
+                    startHelperIfNeeded()
+                }
+            }
             return
         }
+        if loggedStuck { appLog("the server is answering again"); loggedStuck = false }
         misses = 0
+        unreachableSince = nil
+        stuckFor = 0
         reachable = true
         state = s
+        // Ask macOS once per launch, so the helper shows up in the Screen Recording and Accessibility lists.
+        if s.helper, s.screen == false || s.accessibility == false, !askedPermissions {
+            askedPermissions = true
+            appLog("asking macOS for the missing permissions")
+            await askPermissions()
+        }
     }
+
+    func helperRunning() -> Bool { run("/usr/bin/pgrep", ["-x", "WindowRemote"]) == 0 }
+
+    /// Restarts the helper's two parts (they pick up a permission that was just turned on).
+    func restartHelper() {
+        run("/usr/bin/pkill", ["-HUP", "-x", "WindowRemote"])
+        appLog("restarted the helper")
+        note = "Restarting the helper…"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if self.note == "Restarting the helper…" { self.note = nil } }
+    }
+
+    func showHelperInFinder() { NSWorkspace.shared.activateFileViewerSelecting([helperURL]) }
 
     /// If the remote is not running (after a restart, before "start at login" is on), start it.
     func startHelperIfNeeded() {
@@ -202,17 +265,35 @@ struct AttentionCard: View {
         if s.screen == false || s.accessibility == false || !s.tailscale {
             Card(title: "Needs your attention", systemImage: "exclamationmark.triangle.fill") {
                 if s.screen == false {
-                    Fix(text: "Screen Recording is off, so your iPhone cannot see the screen.", button: "Open Settings") { openSettings("Privacy_ScreenCapture") }
-                }
-                if s.accessibility == false {
-                    Fix(text: "Accessibility is off, so taps and typing from your iPhone cannot reach the Mac.", button: "Open Settings") { openSettings("Privacy_Accessibility") }
-                }
-                if !s.tailscale {
-                    Fix(text: "Tailscale is not connected on this Mac, so your iPhone cannot reach it.", button: "Open Tailscale") {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Tailscale.app"))
+                    Fix(text: "Screen Recording is off, so your iPhone cannot see the screen.", button: "Open Settings") {
+                        Task { await m.askPermissions(); openSettings("Privacy_ScreenCapture") }
                     }
                 }
-                Text("In Settings, turn on the switch next to Window Remote.").font(.caption).foregroundStyle(.secondary)
+                if s.accessibility == false {
+                    Fix(text: "Accessibility is off, so taps and typing from your iPhone cannot reach the Mac.", button: "Open Settings") {
+                        Task { await m.askPermissions(); openSettings("Privacy_Accessibility") }
+                    }
+                }
+                if s.screen == false || s.accessibility == false {
+                    Text("Turn on the switch next to **\(m.helperName)** (the background part of Window Remote, with this app's icon). Not in the list? Click Show Helper in Finder, then drag it into the list. After turning on Screen Recording, click Restart Helper (or Quit & Reopen, if macOS offers it).")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Show Helper in Finder") { m.showHelperInFinder() }
+                        Button("Restart Helper") { m.restartHelper() }
+                    }
+                }
+                if !s.tailscale {
+                    if FileManager.default.fileExists(atPath: "/Applications/Tailscale.app") {
+                        Fix(text: "Tailscale is off or signed out on this Mac, so your iPhone cannot reach it. Turn it on and sign in with the same account as your iPhone.", button: "Open Tailscale") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Tailscale.app"))
+                        }
+                    } else {
+                        Fix(text: "Tailscale is not installed. Install it on this Mac and your iPhone, and sign in with the same account on both.", button: "Get Tailscale") {
+                            NSWorkspace.shared.open(URL(string: "https://tailscale.com/download")!)
+                        }
+                    }
+                }
+                if let note = m.note { Text(note).font(.caption).foregroundStyle(.orange) }
             }
             .tint(.orange)
         }
@@ -383,8 +464,19 @@ struct ContentView: View {
                     DevicesCard(s: s)
                     SettingsCard(s: s)
                 } else {
-                    Card(title: "Starting the remote…") {
-                        HStack { ProgressView().controlSize(.small); Text("One moment. If this stays, restart the Mac or open Window Remote again.").foregroundStyle(.secondary) }
+                    if m.stuckFor >= 10 {
+                        Card(title: "The remote is not answering", systemImage: "exclamationmark.triangle.fill") {
+                            Text("It is running, but its web server has not answered for \(m.stuckFor) seconds. Most likely macOS is waiting for you to answer a question, such as access to a folder. Look for a dialog hidden behind other windows and click Allow or OK.")
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("If nothing is there, click Restart Helper. Still stuck? Run ./install.sh again from the Window Remote folder. Details are in ~/Library/Logs/Window Remote.")
+                                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Button("Restart Helper") { m.restartHelper() }
+                        }
+                        .tint(.orange)
+                    } else {
+                        Card(title: "Starting the remote…") {
+                            HStack { ProgressView().controlSize(.small); Text("One moment. If this stays, restart the Mac or open Window Remote again.").foregroundStyle(.secondary) }
+                        }
                     }
                 }
                 Text("Closing this window keeps the remote running. It is only reachable from your own devices on Tailscale.")

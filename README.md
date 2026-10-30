@@ -17,33 +17,39 @@ Open the Remote app on your phone and you see every window that is open on your 
 
 ## What you need
 
-- A Mac with **macOS 14 (Sonoma) or newer**.
+- A Mac with **macOS 14 (Sonoma) or newer**. Both Apple silicon and Intel Macs work (tested on both).
 - An iPhone (any modern phone browser works, but it is designed for iPhone Safari).
 - **Tailscale** (free) on both, signed in to the **same Tailscale account**: [tailscale.com/download](https://tailscale.com/download).
 - On the Mac: **Node.js 20 or newer** ([nodejs.org](https://nodejs.org), or `brew install node`) and Apple's command line tools (`xcode-select --install`).
+- On an Intel Mac, Homebrew now warns that it no longer supports Intel, so the installers from [nodejs.org](https://nodejs.org) and [tailscale.com](https://tailscale.com/download) are the easier choice.
 
 ## Install (on the Mac)
 
-1. Download this repository (green **Code** button, **Download ZIP**, then unzip it), or clone it:
+1. Download this repository (green **Code** button, **Download ZIP**, then unzip it), or clone it. Your home folder is a good place (`~/window-remote`), but anywhere works: the installer copies what runs in the background into its own folder, so the download can sit in Documents, Downloads or iCloud Drive too.
 
    ```bash
-   git clone https://github.com/thoughtcrimegpt/window-remote.git
+   git clone https://github.com/thoughtcrimegpt/window-remote.git ~/window-remote
    ```
 
 2. In Terminal, go into the folder and run the installer:
 
    ```bash
-   cd window-remote
+   cd ~/window-remote
    ./install.sh
    ```
 
-   It builds everything on your Mac (nothing is downloaded except the two web-server packages from npm), starts the remote, and sets it to start at login. The **Window Remote** window opens when it is done.
+   (Downloaded the ZIP instead? Right-click the unzipped folder, then Services, then **New Terminal at Folder**, and type `./install.sh`.)
 
-3. Grant the two permissions the window asks for, in System Settings, Privacy & Security:
+   It builds everything on your Mac (nothing is downloaded except the two web-server packages from npm), starts the remote, and sets it to start at login. The **Window Remote** window opens when it is done. If Tailscale is missing, signed out or off, a red box at the end says so.
+
+3. Grant the two permissions. macOS asks for them by itself; you can also click **Open Settings** in the Window Remote window. In System Settings, Privacy & Security:
    - **Screen Recording**, so your phone can see the screen.
    - **Accessibility**, so taps and typing from your phone reach the Mac.
 
-   Turn on the switch next to **Window Remote** in each list.
+   In each list, turn on the switch next to **Window Remote Helper**. That is the background part of Window Remote, and the only one that needs the permissions. (Installed before this name was added? Then it is listed as **Window Remote**, with the same icon.)
+
+   - **Not in the list?** Click **Show Helper in Finder** in the Window Remote window and drag the helper into the list. Or click **+** under the list, press ⌘⇧G, paste `~/Library/Application Support/Window Remote/Window Remote Helper.app` and click Open.
+   - **After turning on Screen Recording,** choose **Quit & Reopen** if macOS offers it, or click **Restart Helper** in the Window Remote window.
 
 ## Set up your iPhone
 
@@ -81,18 +87,19 @@ The app then also answers at `https://<your-mac>.<tailnet>.ts.net:8764/`. On tha
 
 ## Updating
 
-Get the new version (`git pull`, or download the ZIP again into the same folder) and run `./install.sh` again. Your permissions and paired phones are kept: the background helper that holds the permissions is built only once.
+Get the new version (`git pull`, or download the ZIP again) and run `./install.sh` again. Your permissions and paired phones are kept: the background helper that holds the permissions is built only once.
 
-If you move the folder, run `./install.sh` again from its new place.
+Moving or deleting the download folder does not stop the remote, since it runs from its own copy. Run `./install.sh` from wherever the new version is.
 
 ## Uninstall
 
 ```bash
-./launchd/uninstall.sh
-launchctl bootout gui/$(id -u)/local.window-remote
+./uninstall.sh
 ```
 
-Then delete `~/Applications/Window Remote.app`, the folder `~/Library/Application Support/Window Remote` (helper, paired phones, settings) and `~/Library/Logs/Window Remote`, and remove Window Remote from Screen Recording and Accessibility in System Settings.
+It lists what it will remove and asks first. It stops the remote, quits the app, and removes the login item, `~/Applications/Window Remote.app`, `~/Library/Application Support/Window Remote` (helper, paired phones, settings), `~/Library/Logs/Window Remote` and the Screen Recording and Accessibility entries. It never touches the download folder; delete that yourself if you like. `./uninstall.sh --dry-run` only shows what it would do.
+
+To only stop it from starting at login, turn off "Start when I log in" in the Window Remote window.
 
 ## Troubleshooting
 
@@ -100,16 +107,18 @@ Then delete `~/Applications/Window Remote.app`, the folder `~/Library/Applicatio
 - **"This device is not on your Tailscale account":** the phone must be signed in to the same Tailscale account as the Mac.
 - **Black or frozen picture:** Screen Recording permission is off, or the Mac screen is asleep. Open the Window Remote app on the Mac; it shows what is missing.
 - **Taps do nothing:** Accessibility permission is off.
-- **Logs:** `~/Library/Logs/Window Remote/` (`server.log`, `core.log`, `launcher.log`).
+- **The Window Remote window says the remote is not answering** (or `http://127.0.0.1:8765/` does not load): macOS is probably waiting for you to answer a question, such as access to a folder. Look for a dialog hidden behind other windows. If there is none, click **Restart Helper**, and if it stays stuck, run `./install.sh` again.
+- **Window Remote Helper is not in the Screen Recording list:** open the Window Remote window (it asks macOS to add it), or add it by hand: **Show Helper in Finder**, then drag it into the list. Turning the switch on and then choosing Quit & Reopen (or Restart Helper) finishes it.
+- **Logs:** `~/Library/Logs/Window Remote/` (`server.log`, `core.log`, `launcher.log`, `app.log`).
 
 ## How it is built
 
 - `core/`: the Swift helper (`bin/wr-core`): ScreenCaptureKit capture, VideoToolbox H.264 encoding, mouse and keyboard input, and the "Needs You" window reader.
 - `server/`: the Node web server the phone talks to (pairing, WebRTC video via [werift](https://github.com/shinyoshiaki/werift-webrtc), the phone app in `server/public/`).
-- `launcher/`: the small background app macOS attaches the permissions to. It runs the helper and the server and restarts either one if it stops.
+- `launcher/`: the small background app ("Window Remote Helper") macOS attaches the permissions to. It runs the helper and the server and restarts either one if it stops. It runs them from the copy `install.sh` makes in `~/Library/Application Support/Window Remote/runtime`, never from the download folder.
 - `mac-app/`: the Window Remote window (SwiftUI).
 - `launchd/`: the login item. `tls/`: the optional https setup.
-- `test/smoke.mjs`: checks the server's pairing and security rules without a Mac helper or Tailscale (`node test/smoke.mjs`).
+- `test/smoke.mjs`: checks the server's pairing and security rules without a Mac helper or Tailscale, and the uninstaller in dry-run mode (`node test/smoke.mjs`).
 
 ## License
 

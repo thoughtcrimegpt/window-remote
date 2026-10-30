@@ -137,7 +137,7 @@ enum Needs {
         }
         guard let m = match else { return (false, "That question has changed. Open the window to see it.") }
         guard let f = Windows.bounds(of: windowID) else { return (false, "That window is gone.") }
-        await MainActor.run {
+        _ = await MainActor.run {
             Windows.focus(windowID)
         }
         try? await Task.sleep(nanoseconds: 120_000_000)
