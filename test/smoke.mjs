@@ -2,7 +2,7 @@
 // Starts a test copy of the server on a free port (127.0.0.1 only, temporary data folder) and checks
 // pairing, the host and origin checks, and that unpaired devices get nothing.
 // Usage: node test/smoke.mjs
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -90,6 +90,27 @@ try {
   ws.close();
 } finally {
   server.kill();
+}
+
+// The uninstaller in dry-run mode, in a pretend home folder: lists what it would remove, changes nothing.
+{
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-home-'));
+  const paths = ['Library/Application Support/Window Remote/runtime', 'Library/Logs/Window Remote', 'Applications/Window Remote.app', 'Library/LaunchAgents'];
+  for (const p of paths) fs.mkdirSync(path.join(fakeHome, p), { recursive: true });
+  fs.writeFileSync(path.join(fakeHome, 'Library/LaunchAgents/local.window-remote.plist'), '');
+  const r = spawnSync('/bin/zsh', [path.join(ROOT, 'uninstall.sh'), '--dry-run'], { env: { ...process.env, HOME: fakeHome }, encoding: 'utf8' });
+  const said = r.stdout || '';
+  check('uninstall dry run lists everything it removes', r.status === 0 && ['local.window-remote.plist', 'Applications/Window Remote.app', 'Application Support/Window Remote', 'Logs/Window Remote'].every((x) => said.includes(x)), said + r.stderr);
+  check('uninstall dry run changes nothing', paths.every((p) => fs.existsSync(path.join(fakeHome, p))) && fs.existsSync(path.join(fakeHome, 'Library/LaunchAgents/local.window-remote.plist')));
+  check('uninstall never deletes the download folder', !said.includes(`deletes ${ROOT}`) && said.includes(`keeps this folder: ${ROOT}`), said);
+  const bad = spawnSync('/bin/zsh', [path.join(ROOT, 'uninstall.sh'), '--bogus'], { env: { ...process.env, HOME: fakeHome }, encoding: 'utf8' });
+  check('uninstall refuses unknown options', bad.status === 2 && paths.every((p) => fs.existsSync(path.join(fakeHome, p))));
+}
+
+// The helper must never run anything from the download folder (macOS can block it there).
+{
+  const install = fs.readFileSync(path.join(ROOT, 'install.sh'), 'utf8');
+  check('the helper runs its copy in Application Support', /remoteDir: process\.argv\[2\][\s\S]*"\$RUNTIME" "\$NODE"/.test(install));
 }
 console.log(failed ? `\n${failed} check(s) failed.` : '\nAll checks passed.');
 process.exit(failed ? 1 : 0);
