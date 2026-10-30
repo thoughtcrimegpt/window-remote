@@ -21,7 +21,9 @@ struct StreamRequest {
     var jpeg = false                 // basic mode: JPEG frames instead of H.264
 }
 
-final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
+// Thread safety is handled by hand: `stream` lives on the main thread, the encoder on `queue`, and the
+// request behind `lock`. So it is marked @unchecked Sendable for the closures that hop between them.
+final class Capture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let ipc: IPC
     let encoder = H264Encoder()          // used only on `queue`
     private var stream: SCStream?        // main thread only
